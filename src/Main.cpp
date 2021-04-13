@@ -4,6 +4,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#define STB_DS_IMPLEMENTATION
+#include "stb_ds.h"
+
 LARGE_INTEGER counterEpoch;
 LARGE_INTEGER counterFrequency;
 FILE* logFile;
@@ -67,6 +70,18 @@ typedef double f64;
 
 #include "jcwk/FileSystem.cpp"
 
+const u32 OpName = 5;
+const u32 OpTypeVoid = 2;
+const u32 OpTypeFloat = 22;
+const u32 OpTypeVector = 23;
+const u32 OpTypeMatrix = 24;
+const u32 OpTypePointer = 32;
+const u32 OpVariable = 59;
+const u32 OpDecorate = 71;
+const u32 OpDecorateMember = 72;
+
+const u32 DecorationLocation = 30;
+
 bool done = false;
 FILE* file = NULL;
 size_t wordLength = sizeof(u32);
@@ -75,6 +90,15 @@ size_t bufferSize = wordLength * bufferLength;
 u32* buffer = NULL;
 size_t currentWord = 0;
 size_t readWords = 0;
+
+u32* typeData = NULL;
+u32* stringData = NULL;
+
+struct { u32 key; u32 value; }* locationToVariable = NULL;
+struct { u32 key; u32 value; }* variableToTypePointer = NULL;
+struct { u32 key; u32 value; }* typePointerToType = NULL;
+struct { u32 key; size_t value; }* typeToData = NULL;
+struct { u32 key; size_t value; }* idToString = NULL;
 
 u32 getw() {
     if (currentWord >= readWords) {
@@ -122,49 +146,103 @@ int main(int argc, char** argv) {
         u32 opCodeEnumerant = opCode & 0xFFFF;
         u32 wordCount = opCode >> 16;
 
-        if (opCodeEnumerant == 23) {
-            auto resultId = getw();
-            auto componentType = getw();
-            auto componentCount = getw();
-            char typePrefix = ' ';
-            INFO("type vector: resultId %d, componentType %d, componentCount %d", resultId, componentType, componentCount);
-        } else if (opCodeEnumerant == 32) {
-            auto resultId = getw();
-            auto storage = getw();
-            auto typeId = getw();
-            INFO("type pointer: resultId %d, storage %d, typeId %d", resultId, storage, typeId);
-        } else if (opCodeEnumerant == 59) {
-            auto resultType = getw();
-            auto resultId = getw();
-            auto storageClass = getw();
-            if (wordCount > 4) {
-                auto initializer = getw();
-                INFO("variable: resultId %d, resultType %d, storageClass %d, initializer %d", resultId, resultType, storageClass, initializer);
-            } else {
-                INFO("variable: resultId %d, resultType %d, storageClass %d", resultId, resultType, storageClass);
+        switch (opCodeEnumerant) {
+            case OpName:
+            {
+                auto targetId = getw();
+                hmput(idToString, targetId, arrlen(stringData));
+                auto s = (char*)(buffer + currentWord);
+                INFO("name %d %.*s", targetId, (wordCount - 2)*4, s);
+                for (u32 i = 2; i < wordCount; i++) {
+                    auto word = getw();
+                    arrput(stringData, word);
+                }
             }
-        } else if (opCodeEnumerant == 71) {
-            auto id = getw();
-            auto decoration = getw();
-            if ((decoration == 30) && (wordCount > 3)) {
-                auto location = getw();
-                INFO("%d is at location %d", id, location);
-            } else {
-                INFO("decorate %d with %d", id, decoration);
+            break;
+            case OpTypeVector:
+            case OpTypeFloat:
+            {
+                // Supported types.
+                auto resultId = getw();
+                hmput(typeToData, resultId, arrlen(typeData));
+                arrput(typeData, opCodeEnumerant);
+                for (u32 i = 2; i < wordCount; i++) {
+                    auto word = getw();
+                    arrput(typeData, word);
+                }
+                INFO("type %d", resultId);
             }
-        } else if (opCodeEnumerant == 72) {
-            auto stype = getw();
-            auto member = getw();
-            auto decoration = getw();
-            INFO("decorate member %d of %d with %d", member, stype, decoration);
-        } else {
-            for (i32 i = 0; i < (i32)wordCount - 1; i++) {
-                opCode = getw();
+            break;
+            case OpTypePointer: {
+                auto resultId = getw();
+                auto storage = getw();
+                auto typeId = getw();
+                INFO("type* %d -> typeId %d", resultId, typeId);
+                hmput(typePointerToType, resultId, typeId);
             }
+            break;
+            case OpVariable: {
+                auto resultType = getw();
+                auto resultId = getw();
+                auto storageClass = getw();
+                if (wordCount > 4) {
+                    auto initializer = getw();
+                    INFO("var %d: %d = initializer %d", resultId, resultType, initializer);
+                } else {
+                    INFO("var %d: %d", resultId, resultType);
+                }
+                hmput(variableToTypePointer, resultId, resultType);
+            }
+            break;
+            case OpDecorate: {
+                auto id = getw();
+                auto decoration = getw();
+                if ((decoration == DecorationLocation) && (wordCount > 3)) {
+                    auto location = getw();
+                    hmput(locationToVariable, location, id);
+                    INFO("%d is at location %d", id, location);
+                } else {
+                    INFO("decorate %d with %d", id, decoration);
+                }
+            }
+            break;
+            case OpDecorateMember: {
+                auto stype = getw();
+                auto member = getw();
+                auto decoration = getw();
+                INFO("decorate member %d of %d with %d", member, stype, decoration);
+            }
+            break;
+            default:
+                for (i32 i = 0; i < (i32)wordCount - 1; i++) {
+                    opCode = getw();
+                }
         }
     }
 
-    free(buffer);
+    auto outFile = openFile("out", "w");
+    for (u32 i = 0; i < hmlen(locationToVariable); i++) {
+        auto locationVariablePair = locationToVariable[i];
+        auto location = locationVariablePair.key;
+        auto variable = locationVariablePair.value;
+        auto typePointer = hmget(variableToTypePointer, variable);
+        auto type = hmget(typePointerToType, typePointer);
+        auto data = hmget(typeToData, type);
+
+        fprintf(outFile, "struct Vertex {\n");
+        if (OpTypeVector == typeData[data]) {
+            auto componentType = typeData[++data];
+            auto componentData = hmget(typeToData, componentType);
+            if (OpTypeFloat != typeData[componentData]) {
+                FATAL("unsupported component type");
+            }
+            auto componentCount = typeData[++data];
+            auto stringIdx = hmget(idToString, variable);
+            auto string = (char*)(stringData + stringIdx);
+            fprintf(outFile, "    Vec%d %s;\n", componentCount, string);
+        }
+        fprintf(outFile, "};\n");
+    }
 
     return 0;
 }
