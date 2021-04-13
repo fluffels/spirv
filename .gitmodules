@@ -1,0 +1,3 @@
+[submodule "lib/jcwk"]
+	path = lib/jcwk
+	url = https://github.com/fluffels/jcwk.git
