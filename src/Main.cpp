@@ -133,10 +133,25 @@ int main(int argc, char** argv) {
             auto storage = getw();
             auto typeId = getw();
             INFO("type pointer: resultId %d, storage %d, typeId %d", resultId, storage, typeId);
+        } else if (opCodeEnumerant == 59) {
+            auto resultType = getw();
+            auto resultId = getw();
+            auto storageClass = getw();
+            if (wordCount > 4) {
+                auto initializer = getw();
+                INFO("variable: resultId %d, resultType %d, storageClass %d, initializer %d", resultId, resultType, storageClass, initializer);
+            } else {
+                INFO("variable: resultId %d, resultType %d, storageClass %d", resultId, resultType, storageClass);
+            }
         } else if (opCodeEnumerant == 71) {
             auto id = getw();
             auto decoration = getw();
-            INFO("decorate %d with %d", id, decoration);
+            if ((decoration == 30) && (wordCount > 3)) {
+                auto location = getw();
+                INFO("%d is at location %d", id, location);
+            } else {
+                INFO("decorate %d with %d", id, decoration);
+            }
         } else if (opCodeEnumerant == 72) {
             auto stype = getw();
             auto member = getw();
